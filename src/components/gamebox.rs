@@ -1,259 +1,89 @@
-use std::rc::Rc;
+use yew::{function_component, html, use_effect_with_deps, use_mut_ref, use_state, Callback, Html};
 
-use gloo_timers::callback::Timeout;
-use log::info;
-use wasm_bindgen::prelude::Closure;
-use wasm_bindgen::JsCast;
-use web_sys::KeyboardEvent;
-use yew::{function_component, html, use_effect_with_deps, use_state, Callback, Html};
-
-use crate::components::scorebox::ScoreBox;
-use crate::constants::keycode;
-use crate::game::manager::GameManager;
-use crate::game::{GameMode, GameState};
-use crate::js_bind::document::document;
+use crate::play::stats::Mode;
+use crate::play::PlayApp;
 
 #[function_component(GameBox)]
 pub fn game_box() -> Html {
-    let game_manager = GameManager::new();
-    let _game_info = Rc::clone(&game_manager.game_info);
-    let game_info1 = Rc::clone(&game_manager.game_info);
-    let game_info2 = Rc::clone(&game_manager.game_info);
+    let app = use_mut_ref(|| None::<PlayApp>);
+    let mode = use_state(Mode::default);
 
-    let das = _game_info.borrow().das.clone();
+    {
+        let app = app.clone();
+        use_effect_with_deps(
+            move |_| {
+                match PlayApp::mount() {
+                    Ok(play) => *app.borrow_mut() = Some(play),
+                    Err(e) => log::error!("failed to start play loop: {e:?}"),
+                }
+                // 화면을 떠나면 리스너와 rAF 루프를 해제한다.
+                move || drop(app.borrow_mut().take())
+            },
+            (),
+        );
+    }
 
-    let start_disabled = use_state(|| false);
-
-    let _start_disabled = start_disabled.clone();
     let onclick = {
-        let _start_disabled = _start_disabled;
-
-        Callback::from(move |_: _| {
-            if !game_manager.playing() {
-                //start_disabled.set(true);
-                game_manager.start_game();
-            }
-        })
-    };
-
-    let to_normal_mode = {
-        Callback::from(move |_: _| {
-            let mut game_info = game_info1.borrow_mut();
-            if game_info.game_state != GameState::PLAYING {
-                info!("Switching to normal mode");
-                game_info.game_mode = GameMode::NORMAL;
-            }
-        })
-    };
-
-    let to_sprint_mode = {
+        let app = app.clone();
+        let mode = mode.clone();
         Callback::from(move |_| {
-            let mut game_info = game_info2.borrow_mut();
-            if game_info.game_state != GameState::PLAYING {
-                info!("Switching to sprint mode");
-                game_info.game_mode = GameMode::SPRINT;
+            if let Some(play) = app.borrow().as_ref() {
+                play.start(*mode);
             }
         })
     };
+    let to_normal_mode = {
+        let mode = mode.clone();
+        Callback::from(move |_| mode.set(Mode::Normal))
+    };
+    let to_sprint_mode = {
+        let mode = mode.clone();
+        Callback::from(move |_| mode.set(Mode::Sprint))
+    };
 
-    let game_info = Rc::clone(&_game_info);
-
-    let keydown = Closure::wrap(Box::new(move |event: KeyboardEvent| {
-        match event.key_code() {
-            keycode::LEFT => {
-                if !event.repeat() {
-                    game_info.borrow_mut().on_right_move = None;
-                    game_info.borrow_mut().left_move();
-
-                    let _game_info = Rc::clone(&game_info);
-                    let game_info = Rc::clone(&_game_info);
-
-                    Timeout::new(das, move || {
-                        if game_info.borrow().on_left_move.is_some() {
-                            game_info.borrow_mut().left_move_end();
-                        }
-                    })
-                    .forget();
-
-                    let game_info = Rc::clone(&_game_info);
-
-                    game_info.borrow_mut().on_left_move = Some(instant::Instant::now());
-                }
-            } // left move
-            keycode::RIGHT => {
-                if !event.repeat() {
-                    game_info.borrow_mut().on_right_move = None;
-                    game_info.borrow_mut().right_move();
-
-                    let _game_info = Rc::clone(&game_info);
-                    let game_info = Rc::clone(&_game_info);
-
-                    Timeout::new(das, move || {
-                        if game_info.borrow().on_right_move.is_some() {
-                            game_info.borrow_mut().right_move_end();
-                        }
-                    })
-                    .forget();
-
-                    let game_info = Rc::clone(&_game_info);
-
-                    game_info.borrow_mut().on_right_move = Some(instant::Instant::now());
-                }
-            } // right move
-            keycode::DOWN => {
-                if !event.repeat() {
-                    game_info.borrow_mut().soft_drop();
-                }
-            } // down move
-            keycode::Z => {
-                if !event.repeat() {
-                    game_info.borrow_mut().left_rotate();
-                }
-            } // z
-            keycode::X => {
-                if !event.repeat() {
-                    game_info.borrow_mut().right_rotate();
-                }
-            } // x
-            keycode::A => {
-                if !event.repeat() {
-                    game_info.borrow_mut().double_rotate();
-                }
-            } // a
-            keycode::SPACE => {
-                if !event.repeat() {
-                    game_info.borrow_mut().hard_drop();
-                }
-            } // spacebar
-            keycode::SHIFT => {
-                if !event.repeat() {
-                    game_info.borrow_mut().hold();
-                }
-            } // shift
-            _ => {}
+    let stat = |label: &'static str, id: &'static str, initial: &'static str| {
+        html! {
+            <dl class="flex flex-row justify-between">
+                <dt class="font-mono text-base">{label}</dt>
+                <dd id={id} class="font-mono text-base">{initial}</dd>
+            </dl>
         }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
-
-    document()
-        .add_event_listener_with_callback("keydown", keydown.as_ref().unchecked_ref())
-        .unwrap();
-
-    keydown.forget();
-
-    // let onkeypress = Callback::from(move |event: KeyboardEvent| {
-    //     match event.key_code() {
-    //         keycode::LEFT => {
-    //             game_info.borrow_mut().left_move();
-    //             game_info.borrow_mut().on_left_move = Some(instant::Instant::now());
-
-    //             let game_info = Rc::clone(&game_info);
-
-    //             Timeout::new(das, move || {
-    //                 if game_info.borrow().on_left_move.is_some() {
-    //                     game_info.borrow_mut().left_move_end();
-    //                 }
-    //             })
-    //             .forget();
-    //         } // left move
-    //         keycode::RIGHT => {
-    //             game_info.borrow_mut().right_move();
-    //             game_info.borrow_mut().on_right_move = Some(instant::Instant::now());
-
-    //             let game_info = Rc::clone(&game_info);
-
-    //             Timeout::new(das, move || {
-    //                 if game_info.borrow().on_right_move.is_some() {
-    //                     game_info.borrow_mut().right_move_end();
-    //                 }
-    //             })
-    //             .forget();
-    //         } // right move
-    //         keycode::DOWN => {
-    //             game_info.borrow_mut().soft_drop();
-    //         } // down move
-    //         _ => {}
-    //     }
-    // });
-
-    let game_info = Rc::clone(&_game_info);
-
-    let keyup = Closure::wrap(Box::new(move |event: KeyboardEvent| {
-        match event.key_code() {
-            keycode::LEFT => {
-                game_info.borrow_mut().on_left_move = None;
-            } // left move
-            keycode::RIGHT => {
-                game_info.borrow_mut().on_right_move = None;
-            } // right move
-            keycode::DOWN => {
-                game_info.borrow_mut().on_down_move = None;
-            } // down move
-            _ => {}
-        }
-    }) as Box<dyn FnMut(KeyboardEvent)>);
-
-    document()
-        .add_event_listener_with_callback("keyup", keyup.as_ref().unchecked_ref())
-        .unwrap();
-
-    keyup.forget();
-
-    // 최초 렌더링시 호출
-    use_effect_with_deps(
-        move |_| {
-            GameManager::empty_render();
-            || ()
-        },
-        (),
-    );
+    };
 
     html! {
         <article id="gamebox" tabindex="0" class="flex justify-center">
             <aside class="flex flex-col m-5 justify-between">
                 <dl class="mb-[10px] side-canvas">
                     <dt class="font-mono text-2xl text-center">{"Hold"}</dt>
-                    <dd><canvas id="hold-canvas" class="" width="120" height="120"></canvas></dd>
+                    <dd><canvas id="hold-canvas" width="120" height="120"></canvas></dd>
                 </dl>
                 <dl class="flex flex-col justify-between mb-[10px]">
-                    <dt id="combo" class="font-mono text-base text-center">{" "}</dt>
-                    <dt id="back2back" class="font-mono text-base text-center">{" "}</dt>
-                    <dt id="message" class="font-mono text-base text-center">{" "}</dt>
+                    <dt id="combo" class="font-mono text-base text-center">{" "}</dt>
+                    <dt id="back2back" class="font-mono text-base text-center">{" "}</dt>
+                    <dt id="message" class="font-mono text-base text-center">{" "}</dt>
                 </dl>
 
                 <div class="flex flex-col justify-between mb-[30px]">
-                    <dl class="flex flex-row justify-between">
-                        <dt class="font-mono text-base	">{"Time"}</dt>
-                        <dd id="time" class="font-mono text-base">{"0.00"}</dd>
-                    </dl>
-                    <dl class="flex flex-row justify-between">
-                        <dt class="font-mono text-base	">{"Lines"}</dt>
-                        <dd id="lineclearcount" class="font-mono text-base">{"0"}</dd>
-                    </dl>
-                    <dl class="flex flex-row justify-between">
-                        <dt class="font-mono text-base	">{"Score"}</dt>
-                        <dd id="score">{"0"}</dd>
-                    </dl>
-                    <dl class="flex flex-row justify-between">
-                        <dt class="font-mono text-base	content-start">{"Quad"}</dt>
-                        <dd id="quad">{"0"}</dd>
-                    </dl>
+                    {stat("Time", "time", "0.00")}
+                    {stat("Lines", "lines", "0")}
+                    {stat("Pieces", "pieces", "0")}
+                    {stat("PPS", "pps", "0.00")}
+                    {stat("Attack", "attack", "0")}
+                    {stat("Quad", "quad", "0")}
+                    {stat("PC", "pc", "0")}
                 </div>
 
-                 // <div class="flex flex-col justify-between mb-[30px]">
-                //     <dl class="flex flex-row justify-between">
-                //         <dt class="font-mono text-base	">{"Score"}</dt>
-                //         <dd id="score">{"0"}</dd>
-                //     </dl>
-
-                //     </dl>
-                // </div>
-                <ScoreBox/>
-
-                <button class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-full" onclick={onclick} disabled={*start_disabled}>{"Start"}</button>
+                <button
+                    class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-full"
+                    onclick={onclick}
+                >
+                    {"Start (R)"}
+                </button>
 
                 <div>
                     <input
-                        type="radio" id="normal" name="mode" checked=true
+                        type="radio" id="normal" name="mode"
+                        checked={*mode == Mode::Normal}
                         onclick={to_normal_mode}
                     />
                     <label for="normal">{"Normal"}</label>
@@ -261,26 +91,31 @@ pub fn game_box() -> Html {
                 <div>
                     <input
                         type="radio" id="sprint" name="mode"
+                        checked={*mode == Mode::Sprint}
                         onclick={to_sprint_mode}
                     />
-                    <label for="normal">{"Sprint(40 Lines)"}</label>
+                    <label for="sprint">{"Sprint (40 Lines)"}</label>
                 </div>
+                <p class="font-mono text-xs mt-2 leading-5">
+                    {"← → 이동 · ↓ 소프트 드롭 · Space 하드 드롭"}<br/>
+                    {"↑/X 시계 · Z 반시계 · A 180 · Shift/C 홀드"}
+                </p>
             </aside>
             <dl class="mt-[20px] mr-[10px] side-canvas">
-                <dd><canvas id="garbage-gauge-canvas" class="" width="30" height="600"></canvas></dd>
+                <dd><canvas id="garbage-gauge-canvas" width="30" height="660"></canvas></dd>
             </dl>
 
             <section class="my-5">
-                <canvas id="game-canvas" width="300" height="600"></canvas>
+                <canvas id="game-canvas" width="300" height="660"></canvas>
             </section>
 
-            <aside class="m-5  side-canvas">
+            <aside class="m-5 side-canvas">
                 <p class="font-mono text-2xl text-center">{"Next"}</p>
-                <canvas id="next-canvas" class="" width="120" height="520"></canvas>
+                <canvas id="next-canvas" width="120" height="520"></canvas>
             </aside>
 
             <audio autoplay={true} loop={true}>
-                <source src={"/resource/sound/tetrust.ogg"} type={"audio/mp3"}/>
+                <source src={"/resource/sound/tetrust.ogg"} type={"audio/ogg"}/>
             </audio>
         </article>
     }
