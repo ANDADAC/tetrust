@@ -91,6 +91,51 @@ fn clear_name(result: &LockResult) -> Option<String> {
     Some(name.trim().to_string())
 }
 
+/// 사이드바에 보여 줄 문자열 묶음.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Snapshot {
+    pub time: String,
+    pub lines: String,
+    pub pieces: String,
+    pub pps: String,
+    pub attack: String,
+    pub quads: String,
+    pub perfect_clears: String,
+    pub combo: String,
+    pub back_to_back: String,
+    pub message: String,
+}
+
+impl Snapshot {
+    pub fn new(s: &Stats, time: Millis) -> Self {
+        let message = if s.topped_out {
+            "Game Over".to_string()
+        } else if s.finished_at.is_some() {
+            format!("Finished {}", format_time(time))
+        } else {
+            s.message.clone()
+        };
+        Self {
+            time: format_time(time),
+            lines: s.lines.to_string(),
+            pieces: s.pieces.to_string(),
+            pps: format!("{:.2}", s.pieces_per_second(time)),
+            attack: s.attack.to_string(),
+            quads: s.quads.to_string(),
+            perfect_clears: s.perfect_clears.to_string(),
+            combo: match s.combo {
+                Some(c) if c > 0 => format!("{c} Combo"),
+                _ => String::new(),
+            },
+            back_to_back: match s.back_to_back {
+                Some(b) if b > 0 => format!("B2B x{b}"),
+                _ => String::new(),
+            },
+            message,
+        }
+    }
+}
+
 /// 초 단위, 소수점 둘째 자리.
 pub fn format_time(ms: Millis) -> String {
     format!("{}.{:02}", ms / 1000, ms % 1000 / 10)

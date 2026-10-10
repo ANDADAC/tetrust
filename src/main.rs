@@ -1,7 +1,9 @@
-pub mod components;
-pub mod play;
+mod app;
+mod play;
+mod settings;
 
 fn main() {
+    console_error_panic_hook::set_once();
     wasm_logger::init(wasm_logger::Config::default());
-    yew::Renderer::<components::main::MainComponent>::new().render();
+    leptos::mount::mount_to_body(app::App);
 }

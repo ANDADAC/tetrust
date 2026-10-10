@@ -18,7 +18,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Document, KeyboardEvent, Window};
 
 use render::Renderer;
-use stats::{format_time, Mode, Stats};
+use stats::{Mode, Snapshot, Stats};
 
 /// 한 판의 상태.
 struct Session {
@@ -33,10 +33,10 @@ struct Session {
 }
 
 impl Session {
-    fn new(mode: Mode, start: f64) -> Self {
+    fn new(mode: Mode, config: Config, start: f64) -> Self {
         let seed = (js_sys::Math::random() * (1u64 << 53) as f64) as u64;
         Self {
-            game: Game::new(Config::default(), seed),
+            game: Game::new(config, seed),
             start,
             seq: 0,
             log: Vec::new(),
@@ -80,89 +80,34 @@ impl Session {
     }
 }
 
-/// 사이드바 텍스트. 값이 바뀐 요소만 DOM에 쓴다.
-struct StatsView {
-    document: Document,
-    last: Vec<(&'static str, String)>,
-}
-
-impl StatsView {
-    fn new(document: Document) -> Self {
-        Self {
-            document,
-            last: Vec::new(),
-        }
-    }
-
-    fn set(&mut self, id: &'static str, text: String) {
-        if let Some(entry) = self.last.iter_mut().find(|(k, _)| *k == id) {
-            if entry.1 == text {
-                return;
-            }
-            entry.1 = text.clone();
-        } else {
-            self.last.push((id, text.clone()));
-        }
-        if let Some(el) = self.document.get_element_by_id(id) {
-            el.set_text_content(Some(&text));
-        }
-    }
-
-    fn update(&mut self, session: &Session) {
-        let s = &session.stats;
-        let time = session.display_time();
-        self.set("time", format_time(time));
-        self.set("lines", s.lines.to_string());
-        self.set("pieces", s.pieces.to_string());
-        self.set("pps", format!("{:.2}", s.pieces_per_second(time)));
-        self.set("attack", s.attack.to_string());
-        self.set("quad", s.quads.to_string());
-        self.set("pc", s.perfect_clears.to_string());
-        self.set(
-            "combo",
-            match s.combo {
-                Some(c) if c > 0 => format!("{c} Combo"),
-                _ => String::new(),
-            },
-        );
-        self.set(
-            "back2back",
-            match s.back_to_back {
-                Some(b) if b > 0 => format!("B2B x{b}"),
-                _ => String::new(),
-            },
-        );
-        let message = if s.topped_out {
-            "Game Over".to_string()
-        } else if s.finished_at.is_some() {
-            format!("Finished {}", format_time(time))
-        } else {
-            s.message.clone()
-        };
-        self.set("message", message);
-    }
-}
+/// 통계가 바뀔 때마다 UI에 알려 주는 콜백.
+pub type OnStats = Box<dyn Fn(&Snapshot)>;
 
 struct State {
     session: Option<Session>,
     renderer: Renderer,
-    view: StatsView,
-    /// 다음 판의 모드. R 키 재시작도 이 값을 쓴다.
+    on_stats: OnStats,
+    last_snapshot: Snapshot,
+    /// 다음 판의 모드와 설정. R 키 재시작도 이 값을 쓴다.
     mode: Mode,
+    config: Config,
 }
 
 impl State {
     fn start(&mut self, now: f64) {
-        self.session = Some(Session::new(self.mode, now));
+        self.session = Some(Session::new(self.mode, self.config.clone(), now));
     }
 
     fn draw(&mut self) {
-        match &self.session {
-            Some(session) => {
-                self.renderer.draw(&session.game);
-                self.view.update(session);
-            }
-            None => self.renderer.draw_idle(),
+        let Some(session) = &self.session else {
+            self.renderer.draw_idle();
+            return;
+        };
+        self.renderer.draw(&session.game);
+        let snapshot = Snapshot::new(&session.stats, session.display_time());
+        if snapshot != self.last_snapshot {
+            (self.on_stats)(&snapshot);
+            self.last_snapshot = snapshot;
         }
     }
 }
@@ -181,25 +126,39 @@ pub struct PlayApp {
     frame_handle: Rc<std::cell::Cell<i32>>,
 }
 
+/// 설정 입력칸에 타이핑 중이면 게임 키로 쓰지 않는다.
+fn typing_in_field(event: &KeyboardEvent) -> bool {
+    event.target().is_some_and(|t| {
+        t.dyn_ref::<web_sys::HtmlInputElement>()
+            .is_some_and(|i| i.type_() == "number")
+    })
+}
+
 fn now(window: &Window) -> f64 {
     window.performance().map_or(0.0, |p| p.now())
 }
 
 impl PlayApp {
-    pub fn mount() -> Result<Self, JsValue> {
+    /// `on_stats`는 사이드바 통계가 바뀐 프레임에만 불린다.
+    pub fn mount(on_stats: OnStats) -> Result<Self, JsValue> {
         let window = web_sys::window().ok_or("no window")?;
         let document = window.document().ok_or("no document")?;
         let state = Rc::new(RefCell::new(State {
             session: None,
             renderer: Renderer::new(&document)?,
-            view: StatsView::new(document.clone()),
+            on_stats,
+            last_snapshot: Snapshot::default(),
             mode: Mode::default(),
+            config: Config::default(),
         }));
 
         let keydown = {
             let state = Rc::clone(&state);
             let window = window.clone();
             Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+                if typing_in_field(&event) {
+                    return;
+                }
                 let code = event.code();
                 if code == "KeyR" && !event.repeat() {
                     state.borrow_mut().start(now(&window));
@@ -221,6 +180,9 @@ impl PlayApp {
         let keyup = {
             let state = Rc::clone(&state);
             Closure::<dyn FnMut(KeyboardEvent)>::new(move |event: KeyboardEvent| {
+                if typing_in_field(&event) {
+                    return;
+                }
                 let Some(action) = input::action_for(&event.code()) else {
                     return;
                 };
@@ -273,9 +235,10 @@ impl PlayApp {
     }
 
     /// 새 판을 시작한다.
-    pub fn start(&self, mode: Mode) {
+    pub fn start(&self, mode: Mode, config: Config) {
         let mut state = self.state.borrow_mut();
         state.mode = mode;
+        state.config = config;
         state.start(now(&self.window));
     }
 
