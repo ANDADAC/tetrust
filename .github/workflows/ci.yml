@@ -6,7 +6,7 @@ on:
     branches: [ "main" ]
 
 jobs:
-  engine:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,10 +15,10 @@ jobs:
           components: clippy, rustfmt
           targets: wasm32-unknown-unknown
       - name: fmt
-        run: cargo fmt -p tetrust-engine --check
+        run: cargo fmt --all --check
       - name: clippy
-        run: cargo clippy -p tetrust-engine --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: test
-        run: cargo test -p tetrust-engine
+        run: cargo test --workspace
       - name: wasm build
         run: cargo build --workspace --target wasm32-unknown-unknown
